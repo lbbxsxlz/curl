@@ -63,13 +63,8 @@ jobs:
     - run: echo libtool autoconf automake pkg-config ${{ matrix.build.install }} | xargs -Ix -n1 echo brew '"x"' > /tmp/Brewfile
       name: 'brew bundle'
 
-    - name: 'brew workaround'
-      run: |
-      brew uninstall openssl@1.0.2t
-      brew uninstall python@2.7.17
-      brew untap local/openssl
-      brew untap local/python2
-      brew install openssl@1.1
+    - run: brew uninstall openssl@1.0.2t && brew uninstall python@2.7.17 && brew untap local/openssl && brew untap local/python2 && brew install openssl@1.1
+      name: 'brew workaround'
 
     - run: brew update && brew bundle install --no-lock --file /tmp/Brewfile
       name: 'brew install'
