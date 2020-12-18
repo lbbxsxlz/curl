@@ -11,7 +11,7 @@
  *
  * This software is licensed as described in the file COPYING, which
  * you should have received as part of this distribution. The terms
- * are also available at https://curl.haxx.se/docs/copyright.html.
+ * are also available at https://curl.se/docs/copyright.html.
  *
  * You may opt to use, copy, modify, merge, publish, distribute and/or sell
  * copies of the Software, and permit persons to whom the Software is
@@ -118,6 +118,14 @@ typedef ssize_t (Curl_recv)(struct connectdata *conn, /* connection data */
                             size_t len,               /* max amount to read */
                             CURLcode *err);           /* error to return */
 
+#ifdef USE_HYPER
+typedef CURLcode (*Curl_datastream)(struct Curl_easy *data,
+                                    struct connectdata *conn,
+                                    int *didwhat,
+                                    bool *done,
+                                    int select_res);
+#endif
+
 #include "mime.h"
 #include "imap.h"
 #include "pop3.h"
@@ -132,6 +140,7 @@ typedef ssize_t (Curl_recv)(struct connectdata *conn, /* connection data */
 #include "wildcard.h"
 #include "multihandle.h"
 #include "quic.h"
+#include "c-hyper.h"
 
 #ifdef HAVE_GSSAPI
 # ifdef HAVE_GSSGNU
@@ -205,14 +214,14 @@ struct ssl_backend_data;
 
 /* struct for data related to each SSL connection */
 struct ssl_connect_data {
-  /* Use ssl encrypted communications TRUE/FALSE, not necessarily using it atm
-     but at least asked to or meaning to use it. See 'state' for the exact
-     current state of the connection. */
   ssl_connection_state state;
   ssl_connect_state connecting_state;
 #if defined(USE_SSL)
   struct ssl_backend_data *backend;
 #endif
+  /* Use ssl encrypted communications TRUE/FALSE. The library is not
+     necessarily using ssl at the moment but at least asked to or means to use
+     it. See 'state' for the exact current state of the connection. */
   BIT(use);
 };
 
@@ -519,7 +528,7 @@ struct Curl_async {
   int port;
   struct Curl_dns_entry *dns;
   int status; /* if done is TRUE, this is the status from the callback */
-  void *os_specific;  /* 'struct thread_data' for Windows */
+  struct thread_data *tdata;
   BIT(done);  /* set TRUE when the lookup is complete */
 };
 
@@ -604,6 +613,8 @@ struct SingleRequest {
                                    following second response code) result in a
                                    CURLE_GOT_NOTHING error code */
 
+  curl_off_t pendingheader;      /* this many bytes left to send is actually
+                                    header and not body */
   struct curltime start;         /* transfer started at this time */
   struct curltime now;           /* current time */
   enum {
@@ -643,8 +654,23 @@ struct SingleRequest {
      and the 'upload_present' contains the number of bytes available at this
      position */
   char *upload_fromhere;
-  void *protop;       /* Allocated protocol-specific data. Each protocol
-                         handler makes sure this points to data it needs. */
+
+  /* Allocated protocol-specific data. Each protocol handler makes sure this
+     points to data it needs. */
+  union {
+    struct FILEPROTO *file;
+    struct FTP *ftp;
+    struct HTTP *http;
+    struct IMAP *imap;
+    struct ldapreqinfo *ldap;
+    struct MQTT *mqtt;
+    struct POP3 *pop3;
+    struct RTSP *rtsp;
+    struct smb_request *smb;
+    struct SMTP *smtp;
+    struct SSHPROTO *ssh;
+    struct TELNET *telnet;
+  } p;
 #ifndef CURL_DISABLE_DOH
   struct dohdata doh; /* DoH specific data for this request */
 #endif
@@ -802,7 +828,11 @@ struct proxy_info {
 /* struct for HTTP CONNECT state data */
 struct http_connect_state {
   struct dynbuf rcvbuf;
-  int keepon;
+  enum keeponval {
+    KEEPON_DONE,
+    KEEPON_CONNECT,
+    KEEPON_IGNORE
+  } keepon;
   curl_off_t cl; /* size of content to read and ignore */
   enum {
     TUNNEL_INIT,    /* init/default/no tunnel state */
@@ -1093,6 +1123,10 @@ struct connectdata {
 #ifdef USE_UNIX_SOCKETS
   char *unix_domain_socket;
 #endif
+#ifdef USE_HYPER
+  /* if set, an alternative data transfer function */
+  Curl_datastream datastream;
+#endif
 };
 
 /* The end of connectdata. */
@@ -1186,17 +1220,6 @@ struct Progress {
   BIT(callback);  /* set when progress callback is used */
   BIT(is_t_startransfer_set);
 };
-
-typedef enum {
-  HTTPREQ_NONE, /* first in list */
-  HTTPREQ_GET,
-  HTTPREQ_POST,
-  HTTPREQ_POST_FORM, /* we make a difference internally */
-  HTTPREQ_POST_MIME, /* we make a difference internally */
-  HTTPREQ_PUT,
-  HTTPREQ_HEAD,
-  HTTPREQ_LAST /* last in list */
-} Curl_HttpReq;
 
 typedef enum {
     RTSPREQ_NONE, /* first in list */
@@ -1379,14 +1402,17 @@ struct UrlState {
   int stream_weight;
   CURLU *uh; /* URL handle for the current parsed URL */
   struct urlpieces up;
-  Curl_HttpReq httpreq; /* what kind of HTTP request (if any) is this */
 #ifndef CURL_DISABLE_HTTP
+  Curl_HttpReq httpreq; /* what kind of HTTP request (if any) is this */
   size_t trailers_bytes_sent;
   struct dynbuf trailers_buf; /* a buffer containing the compiled trailing
                                  headers */
 #endif
   trailers_state trailers_state; /* whether we are sending trailers
                                        and what stage are we at */
+#ifdef USE_HYPER
+  CURLcode hresult; /* used to pass return codes back from hyper callbacks */
+#endif
 
   /* Dynamically allocated strings, MUST be freed before this struct is
      killed. */
@@ -1531,35 +1557,25 @@ enum dupstring {
   STRING_RTSP_SESSION_ID, /* Session ID to use */
   STRING_RTSP_STREAM_URI, /* Stream URI for this request */
   STRING_RTSP_TRANSPORT,  /* Transport for this session */
-
   STRING_SSH_PRIVATE_KEY, /* path to the private key file for auth */
   STRING_SSH_PUBLIC_KEY,  /* path to the public key file for auth */
   STRING_SSH_HOST_PUBLIC_KEY_MD5, /* md5 of host public key in ascii hex */
   STRING_SSH_KNOWNHOSTS,  /* file name of knownhosts file */
-
   STRING_PROXY_SERVICE_NAME, /* Proxy service name */
   STRING_SERVICE_NAME,    /* Service name */
   STRING_MAIL_FROM,
   STRING_MAIL_AUTH,
-
   STRING_TLSAUTH_USERNAME_ORIG,  /* TLS auth <username> */
   STRING_TLSAUTH_USERNAME_PROXY, /* TLS auth <username> */
   STRING_TLSAUTH_PASSWORD_ORIG,  /* TLS auth <password> */
   STRING_TLSAUTH_PASSWORD_PROXY, /* TLS auth <password> */
-
   STRING_BEARER,                /* <bearer>, if used */
-
   STRING_UNIX_SOCKET_PATH,      /* path to Unix socket, if used */
-
   STRING_TARGET,                /* CURLOPT_REQUEST_TARGET */
   STRING_DOH,                   /* CURLOPT_DOH_URL */
-
   STRING_ALTSVC,                /* CURLOPT_ALTSVC */
-
+  STRING_HSTS,                  /* CURLOPT_HSTS */
   STRING_SASL_AUTHZID,          /* CURLOPT_SASL_AUTHZID */
-
-  STRING_TEMP_URL,              /* temp URL storage for proxy use */
-
   STRING_DNS_SERVERS,
   STRING_DNS_INTERFACE,
   STRING_DNS_LOCAL_IP4,
@@ -1648,7 +1664,12 @@ struct UserDefined {
   curl_conv_callback convtonetwork;
   /* function to convert from UTF-8 encoding: */
   curl_conv_callback convfromutf8;
-
+#ifdef USE_HSTS
+  curl_hstsread_callback hsts_read;
+  void *hsts_read_userp;
+  curl_hstswrite_callback hsts_write;
+  void *hsts_write_userp;
+#endif
   void *progress_client; /* pointer to pass to the progress callback */
   void *ioctl_client;   /* pointer to pass to the ioctl callback */
   long timeout;         /* in milliseconds, 0 means no timeout */
@@ -1685,7 +1706,9 @@ struct UserDefined {
                                     the hostname and port to connect to */
   curl_TimeCond timecondition; /* kind of time/date comparison */
   time_t timevalue;       /* what time to compare with */
+#ifndef CURL_DISABLE_HTTP
   Curl_HttpReq method;   /* what kind of HTTP request (if any) is this */
+#endif
   long httpversion; /* when non-zero, a specific HTTP version requested to
                        be used in the library's request(s) */
   struct ssl_config_data ssl;  /* user defined SSL stuff */
@@ -1899,6 +1922,9 @@ struct Curl_easy {
                                   NOTE that the 'cookie' field in the
                                   UserDefined struct defines if the "engine"
                                   is to be used or not. */
+#ifdef USE_HSTS
+  struct hsts *hsts;
+#endif
 #ifndef CURL_DISABLE_ALTSVC
   struct altsvcinfo *asi;      /* the alt-svc cache */
 #endif
@@ -1916,6 +1942,9 @@ struct Curl_easy {
   iconv_t inbound_cd;          /* for translating from the network encoding */
   iconv_t utf8_cd;             /* for translating to UTF8 */
 #endif /* CURL_DOES_CONVERSIONS && HAVE_ICONV */
+#ifdef USE_HYPER
+  struct hyptransfer hyp;
+#endif
   unsigned int magic;          /* set to a CURLEASY_MAGIC_NUMBER */
 };
 

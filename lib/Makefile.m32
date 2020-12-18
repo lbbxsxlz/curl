@@ -9,7 +9,7 @@
 #
 # This software is licensed as described in the file COPYING, which
 # you should have received as part of this distribution. The terms
-# are also available at https://curl.haxx.se/docs/copyright.html.
+# are also available at https://curl.se/docs/copyright.html.
 #
 # You may opt to use, copy, modify, merge, publish, distribute and/or sell
 # copies of the Software, and permit persons to whom the Software is
@@ -226,6 +226,9 @@ endif
 ifeq ($(findstring -ngtcp2,$(CFG)),-ngtcp2)
 NGTCP2 = 1
 endif
+ifeq ($(findstring -unicode,$(CFG)),-unicode)
+UNICODE = 1
+endif
 
 INCLUDES = -I. -I../include
 CFLAGS += -DBUILDING_LIBCURL
@@ -233,6 +236,9 @@ ifdef SSL
   ifdef WINSSL
     CFLAGS += -DCURL_WITH_MULTI_SSL
   endif
+endif
+ifdef UNICODE
+  CFLAGS += -DUNICODE -D_UNICODE
 endif
 
 ifdef SYNC

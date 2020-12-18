@@ -9,7 +9,7 @@
 #
 # This software is licensed as described in the file COPYING, which
 # you should have received as part of this distribution. The terms
-# are also available at https://curl.haxx.se/docs/copyright.html.
+# are also available at https://curl.se/docs/copyright.html.
 #
 # You may opt to use, copy, modify, merge, publish, distribute and/or sell
 # copies of the Software, and permit persons to whom the Software is
@@ -63,7 +63,7 @@ message(STATUS "curl version=[${CURL_VERSION}]")
 # SET(PACKAGE_NAME "curl")
 # SET(PACKAGE_VERSION "-")
 # SET(PACKAGE_STRING "curl-")
-# SET(PACKAGE_BUGREPORT "a suitable curl mailing list => https://curl.haxx.se/mail/")
+# SET(PACKAGE_BUGREPORT "a suitable curl mailing list => https://curl.se/mail/")
 set(OPERATING_SYSTEM "${CMAKE_SYSTEM_NAME}")
 set(OS "\"${CMAKE_SYSTEM_NAME}\"")
 
@@ -623,28 +623,25 @@ check_library_exists_concat("idn2" idn2_lookup_ul HAVE_LIBIDN2)
 # Check for symbol dlopen (same as HAVE_LIBDL)
 check_library_exists("${CURL_LIBS}" dlopen "" HAVE_DLOPEN)
 
-option(CURL_ZLIB "Set to ON to enable building curl with zlib support." ON)
 set(HAVE_LIBZ OFF)
 set(HAVE_ZLIB_H OFF)
 set(USE_ZLIB OFF)
-if(CURL_ZLIB)
-  find_package(ZLIB QUIET)
-  if(ZLIB_FOUND)
-    set(HAVE_ZLIB_H ON)
-    set(HAVE_LIBZ ON)
-    set(USE_ZLIB ON)
+optional_dependency(ZLIB)
+if(ZLIB_FOUND)
+  set(HAVE_ZLIB_H ON)
+  set(HAVE_LIBZ ON)
+  set(USE_ZLIB ON)
 
-    # Depend on ZLIB via imported targets if supported by the running
-    # version of CMake.  This allows our dependents to get our dependencies
-    # transitively.
-    if(NOT CMAKE_VERSION VERSION_LESS 3.4)
-      list(APPEND CURL_LIBS ZLIB::ZLIB)
-    else()
-      list(APPEND CURL_LIBS ${ZLIB_LIBRARIES})
-      include_directories(${ZLIB_INCLUDE_DIRS})
-    endif()
-    list(APPEND CMAKE_REQUIRED_INCLUDES ${ZLIB_INCLUDE_DIRS})
+  # Depend on ZLIB via imported targets if supported by the running
+  # version of CMake.  This allows our dependents to get our dependencies
+  # transitively.
+  if(NOT CMAKE_VERSION VERSION_LESS 3.4)
+    list(APPEND CURL_LIBS ZLIB::ZLIB)
+  else()
+    list(APPEND CURL_LIBS ${ZLIB_LIBRARIES})
+    include_directories(${ZLIB_INCLUDE_DIRS})
   endif()
+  list(APPEND CMAKE_REQUIRED_INCLUDES ${ZLIB_INCLUDE_DIRS})
 endif()
 
 option(CURL_BROTLI "Set to ON to enable building curl with brotli support." OFF)
@@ -776,6 +773,7 @@ if(CMAKE_USE_GSSAPI)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${GSS_COMPILER_FLAGS}")
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${GSS_LINKER_FLAGS}")
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${GSS_LINKER_FLAGS}")
+    set(CMAKE_STATIC_LINKER_FLAGS "${CMAKE_STATIC_LINKER_FLAGS} ${GSS_LINKER_FLAGS}")
     list(APPEND CURL_LIBS ${GSS_LIBRARIES})
 
   else()
@@ -911,6 +909,7 @@ check_include_file_concat("net/if.h"         HAVE_NET_IF_H)
 check_include_file_concat("netdb.h"          HAVE_NETDB_H)
 check_include_file_concat("netinet/in.h"     HAVE_NETINET_IN_H)
 check_include_file_concat("netinet/tcp.h"    HAVE_NETINET_TCP_H)
+check_include_file("linux/tcp.h"      HAVE_LINUX_TCP_H)
 
 check_include_file_concat("pem.h"            HAVE_PEM_H)
 check_include_file_concat("poll.h"           HAVE_POLL_H)
@@ -1324,10 +1323,10 @@ if(BUILD_CURL_EXE)
   add_subdirectory(src)
 endif()
 
-option(BUILD_TESTING "Build tests" "${PERL_FOUND}")
-if(NOT PERL_FOUND)
-  message(STATUS "Perl not found, testing disabled.")
-elseif(BUILD_TESTING)
+cmake_dependent_option(BUILD_TESTING "Build tests"
+  ON "PERL_FOUND;NOT CURL_DISABLE_TESTS"
+  OFF)
+if(BUILD_TESTING)
   add_subdirectory(tests)
 endif()
 
@@ -1402,6 +1401,7 @@ _add_if("LDAPS"         NOT CURL_DISABLE_LDAPS AND
 _add_if("DICT"          NOT CURL_DISABLE_DICT)
 _add_if("TFTP"          NOT CURL_DISABLE_TFTP)
 _add_if("GOPHER"        NOT CURL_DISABLE_GOPHER)
+_add_if("GOPHERS"       NOT CURL_DISABLE_GOPHER AND SSL_ENABLED)
 _add_if("POP3"          NOT CURL_DISABLE_POP3)
 _add_if("POP3S"         NOT CURL_DISABLE_POP3 AND SSL_ENABLED)
 _add_if("IMAP"          NOT CURL_DISABLE_IMAP)
